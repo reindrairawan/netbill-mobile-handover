@@ -19,6 +19,7 @@ import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
 import { PasswordInput } from '@/components/password-input';
 import { sharedStyles } from '@/constants/mobile-styles';
+import { isResellerScopedRole } from '@/types/api';
 
 interface CustomerDTO {
   id: string;
@@ -70,10 +71,12 @@ const statusColor: Record<CustomerDTO['status'], string> = {
 const emptyCustomerForm = { name: '', phone: '', email: '', address: '', categoryId: '' as number | '' };
 const emptySubForm = { packageId: '' as number | '', pppoeUsername: '', pppoePassword: '', billingDay: '1', routerId: '' as number | '' };
 
+const CUSTOMER_PAGE_SIZE = 30;
+
 /** Tab "Pelanggan" — khusus role staff: cari, lihat detail, tambah/edit pelanggan & langganan, ganti paket, ganti sandi PPPoE, isolir/terminasi & import. */
 export default function PelangganScreen() {
   const { user, apiFetch, can } = useAuth();
-  const isReseller = user?.role === 'reseller';
+  const isReseller = isResellerScopedRole(user?.role);
   const isSuperadmin = user?.role === 'superadmin';
   const canManageCustomers = can('customers.manage');
   const canDeleteCustomers = can('customers.delete');
@@ -119,20 +122,74 @@ export default function PelangganScreen() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadCustomers = useCallback(
-    async (q: string) => {
-      setIsLoading(true);
-      try {
-        const res = await apiFetch(`/customers?page=1&pageSize=30&q=${encodeURIComponent(q)}`);
-        setCustomers(res?.data || []);
-      } catch (e: any) {
-        Alert.alert('Gagal Memuat Pelanggan', e.message || 'Koneksi ke backend bermasalah.');
-      } finally {
-        setIsLoading(false);
-      }
-    },
+  // Daftar dimuat per halaman saat digulir. Dulu hanya halaman pertama (30 data) yang
+  // diambil, sehingga admin/reseller dengan pelanggan lebih banyak tidak pernah melihat sisanya.
+  const [total, setTotal] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pageRef = useRef(1);
+  const queryRef = useRef('');
+  const loadingMoreRef = useRef(false);
+  // Naik setiap kali daftar dimuat ulang (pencarian baru/refresh) — respons yang datang
+  // terlambat dari permintaan sebelumnya dibuang supaya tidak menimpa hasil terbaru.
+  const requestSeq = useRef(0);
+
+  const fetchPage = useCallback(
+    (q: string, page: number) =>
+      apiFetch(`/customers?page=${page}&pageSize=${CUSTOMER_PAGE_SIZE}&q=${encodeURIComponent(q)}`),
     [apiFetch],
   );
+
+  const loadCustomers = useCallback(
+    async (q: string, opts: { refreshing?: boolean } = {}) => {
+      const seq = ++requestSeq.current;
+      queryRef.current = q;
+      if (opts.refreshing) setIsRefreshing(true);
+      else setIsLoading(true);
+      try {
+        const res = await fetchPage(q, 1);
+        if (seq !== requestSeq.current) return;
+        const rows: CustomerDTO[] = res?.data || [];
+        pageRef.current = 1;
+        setCustomers(rows);
+        setTotal(res?.meta?.total ?? rows.length);
+      } catch (e: any) {
+        if (seq === requestSeq.current) Alert.alert('Gagal Memuat Pelanggan', e.message || 'Koneksi ke backend bermasalah.');
+      } finally {
+        if (seq === requestSeq.current) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [fetchPage],
+  );
+
+  const loadMore = useCallback(async () => {
+    // onEndReached bisa terpicu beberapa kali berturut-turut; ref mencegah halaman yang sama diminta dobel.
+    if (loadingMoreRef.current || isLoading || customers.length >= total) return;
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    const seq = requestSeq.current;
+    const nextPage = pageRef.current + 1;
+    try {
+      const res = await fetchPage(queryRef.current, nextPage);
+      if (seq !== requestSeq.current) return;
+      const rows: CustomerDTO[] = res?.data || [];
+      pageRef.current = nextPage;
+      // Pelanggan yang baru ditambahkan menggeser urutan halaman — buang yang sudah tampil.
+      setCustomers((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        return [...prev, ...rows.filter((c) => !seen.has(c.id))];
+      });
+      setTotal(res?.meta?.total ?? total);
+    } catch (e: any) {
+      Alert.alert('Gagal Memuat Pelanggan', e.message || 'Koneksi ke backend bermasalah.');
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [customers.length, fetchPage, isLoading, total]);
 
   useEffect(() => {
     loadCustomers('');
@@ -521,6 +578,24 @@ export default function PelangganScreen() {
           contentContainerStyle={sharedStyles.scrollContent}
           data={customers}
           keyExtractor={(item) => item.id}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          refreshing={isRefreshing}
+          onRefresh={() => loadCustomers(query, { refreshing: true })}
+          ListHeaderComponent={
+            total > 0 ? (
+              <Text style={styles.countLabel}>
+                Menampilkan {customers.length} dari {total} pelanggan
+              </Text>
+            ) : null
+          }
+          ListFooterComponent={
+            isLoadingMore ? (
+              <ActivityIndicator color="#0052cc" style={{ marginVertical: 16 }} />
+            ) : customers.length > 0 && customers.length >= total ? (
+              <Text style={styles.endLabel}>Semua pelanggan sudah ditampilkan</Text>
+            ) : null
+          }
           ListEmptyComponent={<Text style={sharedStyles.emptyText}>Pelanggan tidak ditemukan.</Text>}
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.row} onPress={() => openDetail(item)}>
@@ -924,6 +999,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  countLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  endLabel: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginVertical: 16,
   },
   rowSub: {
     fontSize: 11,

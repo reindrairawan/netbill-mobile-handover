@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -21,17 +22,28 @@ export function LoginScreen() {
   const { backendUrl, isLoggingIn, login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert('Validasi', 'Email dan password harus diisi.');
+    setErrorMessage('');
+    if (!email.trim() || !password) {
+      const msg = 'Email/ID dan password harus diisi.';
+      setErrorMessage(msg);
+      if (Platform.OS !== 'web') {
+        Alert.alert('Validasi', msg);
+      }
       return;
     }
     try {
-      await login(email, password);
+      await login(email.trim(), password);
     } catch (e: any) {
-      Alert.alert('Login Gagal', e.message || 'Koneksi ke server gagal.');
+      const msg = e.message || 'Koneksi ke server gagal.';
+      setErrorMessage(msg);
+      console.error('Login error:', e);
+      if (Platform.OS !== 'web') {
+        Alert.alert('Login Gagal', msg);
+      }
     }
   };
 
@@ -57,7 +69,13 @@ export function LoginScreen() {
         <Text style={styles.loginSubtitle}>PORTAL PELANGGAN &amp; STAFF ISP</Text>
 
         <View style={styles.loginCard}>
-          <Text style={styles.inputLabel}>Alamat Email</Text>
+          {errorMessage ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>⚠️ {errorMessage}</Text>
+            </View>
+          ) : null}
+
+          <Text style={styles.inputLabel}>Alamat Email / ID Pelanggan</Text>
           <TextInput
             style={styles.inputField}
             placeholder="nama@email.com"
@@ -169,6 +187,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 20,
     elevation: 8,
+  },
+  errorBox: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 18,
   },
   inputLabel: {
     fontSize: 12,

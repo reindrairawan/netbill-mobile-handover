@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/auth-context';
 import { SHOW_BACKEND_SWITCHER } from '@/constants/app-config';
+import { isResellerScopedRole } from '@/types/api';
 
 interface AppHeaderProps {
   subtitle?: string;
@@ -13,7 +14,7 @@ interface AppHeaderProps {
 export function AppHeader({ subtitle, onOpenSettings }: AppHeaderProps) {
   const { user } = useAuth();
   const isStaff = user?.role !== 'customer';
-  const isReseller = user?.role === 'reseller';
+  const isReseller = isResellerScopedRole(user?.role);
 
   const initials = user?.name
     ? user.name

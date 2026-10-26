@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEFAULT_BACKEND_URL } from '@/constants/app-config';
 
@@ -6,6 +6,11 @@ import { DEFAULT_BACKEND_URL } from '@/constants/app-config';
 // backend menambah field (mustSetPassword). Sekarang mengikuti kontrak bersama.
 export type { AuthUser } from '@/types/api';
 import type { AuthUser, LoginResponse } from '@/types/api';
+import { CLIENT_PLATFORM_HEADER } from '@/types/api';
+
+// Menandai request dari aplikasi ini sebagai mobile — backend memberi sesi mobile umur
+// refresh token yang jauh lebih panjang dari web, supaya tidak sering diminta login ulang.
+const PLATFORM_HEADER = { [CLIENT_PLATFORM_HEADER]: 'mobile' };
 
 interface AuthContextValue {
   backendUrl: string;
@@ -21,6 +26,8 @@ interface AuthContextValue {
   applySession: (res: LoginResponse) => Promise<void>;
   /** Helper fetch ke backend NetBill — otomatis pasang Authorization header & base URL, auto-refresh token & redirect login jika sesi kedaluwarsa. */
   apiFetch: (path: string, options?: RequestInit, isRetry?: boolean) => Promise<any>;
+  /** Sama seperti apiFetch, tapi isi respons dikembalikan sebagai byte (mis. gambar PNG). */
+  apiFetchBytes: (path: string) => Promise<Uint8Array>;
   /**
    * Permission efektif user (dari matrix RBAC "Hak Akses" di web-admin, `GET /permissions/me`) —
    * dipakai buat gating tombol/aksi di mobile.
@@ -36,6 +43,14 @@ let refreshPromise: Promise<boolean> | null = null;
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
   const [token, setToken] = useState<string | null>(null);
+  // Token yang dipakai request dibaca dari ref, bukan dari state: state React terkunci di
+  // closure render lama, sehingga request ulang setelah refresh dulu tetap mengirim access
+  // token yang sudah kedaluwarsa, kena 401 lagi, lalu pengguna dipaksa logout.
+  const tokenRef = useRef<string | null>(null);
+  const applyToken = (value: string | null) => {
+    tokenRef.current = value;
+    setToken(value);
+  };
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -50,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const storedToken = await AsyncStorage.getItem('NETBILL_TOKEN');
         const storedUserJson = await AsyncStorage.getItem('NETBILL_USER');
         if (storedToken && storedUserJson) {
-          setToken(storedToken);
+          applyToken(storedToken);
           setUser(JSON.parse(storedUserJson));
         }
       } catch (e) {
@@ -85,6 +100,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const saveBackendUrl = async (url: string) => {
     let cleanUrl = url.trim();
+    if (!/^https?:\/\//i.test(cleanUrl) && cleanUrl.length > 0) {
+      cleanUrl = `http://${cleanUrl}`;
+    }
     if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
     await AsyncStorage.setItem('NETBILL_BACKEND_URL', cleanUrl);
     setBackendUrl(cleanUrl);
@@ -94,7 +112,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.removeItem('NETBILL_TOKEN');
     AsyncStorage.removeItem('NETBILL_REFRESH_TOKEN');
     AsyncStorage.removeItem('NETBILL_USER');
-    setToken(null);
+    applyToken(null);
     setUser(null);
     setPermissions(null);
   };
@@ -109,7 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const res = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...PLATFORM_HEADER },
           body: JSON.stringify({ refreshToken: storedRefreshToken }),
         });
 
@@ -124,7 +142,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await AsyncStorage.setItem('NETBILL_REFRESH_TOKEN', newRefreshToken);
         await AsyncStorage.setItem('NETBILL_USER', JSON.stringify(newProfile));
 
-        setToken(newToken);
+        applyToken(newToken);
         setUser(newProfile);
         return true;
       } catch {
@@ -137,11 +155,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return refreshPromise;
   };
 
-  const apiFetch = async (path: string, options: RequestInit = {}, isRetry = false): Promise<any> => {
+  /**
+   * Inti semua request ke backend: base URL, header (token & platform), refresh token
+   * saat 401, dan pesan error dari body. Mengembalikan Response yang sudah pasti ok,
+   * supaya pemanggil bebas membaca isinya sebagai JSON maupun biner (gambar QR).
+   */
+  const request = async (path: string, options: RequestInit = {}, isRetry = false): Promise<Response> => {
     const url = `${backendUrl}/api/v1${path}`;
-    const currentToken = token || (await AsyncStorage.getItem('NETBILL_TOKEN'));
+    const currentToken = tokenRef.current ?? (await AsyncStorage.getItem('NETBILL_TOKEN'));
 
     const headers = {
+      ...PLATFORM_HEADER,
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(currentToken ? { Authorization: `Bearer ${currentToken}` } : {}),
       ...options.headers,
@@ -153,7 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (response.status === 401 && !isRetry && path !== '/auth/login' && path !== '/auth/refresh') {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
-        return apiFetch(path, options, true);
+        return request(path, options, true);
       }
       logout();
       throw new Error('UNAUTHORIZED');
@@ -175,7 +199,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!isRetry) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
-            return apiFetch(path, options, true);
+            return request(path, options, true);
           }
         }
         logout();
@@ -184,15 +208,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(errMsg);
     }
 
+    return response;
+  };
+
+  const apiFetch = async (path: string, options: RequestInit = {}, isRetry = false): Promise<any> => {
+    const response = await request(path, options, isRetry);
     if (response.status === 204) return null;
     return response.json();
+  };
+
+  const apiFetchBytes = async (path: string): Promise<Uint8Array> => {
+    const response = await request(path);
+    return new Uint8Array(await response.arrayBuffer());
   };
 
   const applySession = async (res: LoginResponse) => {
     await AsyncStorage.setItem('NETBILL_TOKEN', res.accessToken);
     await AsyncStorage.setItem('NETBILL_REFRESH_TOKEN', res.refreshToken);
     await AsyncStorage.setItem('NETBILL_USER', JSON.stringify(res.user));
-    setToken(res.accessToken);
+    applyToken(res.accessToken);
     setUser(res.user);
   };
 
@@ -201,7 +235,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch(`${backendUrl}/api/v1/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...PLATFORM_HEADER },
         body: JSON.stringify({ email, password }),
       });
 
@@ -228,7 +262,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       await AsyncStorage.setItem('NETBILL_USER', JSON.stringify(userProfile));
 
-      setToken(userToken);
+      applyToken(userToken);
       setUser(userProfile);
     } finally {
       setIsLoggingIn(false);
@@ -248,6 +282,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         applySession,
         apiFetch,
+        apiFetchBytes,
         permissions,
         can,
       }}
