@@ -2,7 +2,7 @@
   "expo": {
     "name": "FiberAccess",
     "slug": "mobile",
-    "version": "1.0.5",
+    "version": "1.1.0",
     "orientation": "portrait",
     "runtimeVersion": {
       "policy": "appVersion"
@@ -59,7 +59,18 @@
           }
         }
       ],
-      "expo-image"
+      "expo-image",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "NetBill membutuhkan akses foto untuk menyimpan gambar QR QRIS pembayaran.",
+          "savePhotosPermission": "NetBill menyimpan gambar QR QRIS ke galeri agar bisa dibayar dari aplikasi bank atau e-wallet.",
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": [
+            "photo"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

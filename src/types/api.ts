@@ -1,16 +1,22 @@
 /**
- * Tipe dan kontrak API untuk aplikasi mobile FiberAccess.
- * Dipisahkan dari monorepo (@netbill/shared) untuk kemandirian repository.
+ * DIHASILKAN OTOMATIS dari packages/shared/src/index.ts (monorepo NetBill) oleh
+ * `apps/mobile/scripts/sync-handover.mjs` — jangan diedit manual, perubahan akan tertimpa.
+ * Berisi hanya tipe/konstanta yang dipakai aplikasi mobile.
  */
 
-// ---- Enum domain ----
 export const UserRole = {
   SUPERADMIN: 'superadmin',
   OPERATOR: 'operator',
   RESELLER: 'reseller',
+  RESELLER_TECH: 'reseller_tech',
   CUSTOMER: 'customer',
 } as const;
+
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
+
+export function isResellerScopedRole(role: string | null | undefined): boolean {
+  return role === UserRole.RESELLER || role === UserRole.RESELLER_TECH;
+}
 
 export const CustomerStatus = {
   PENDING: 'pending',
@@ -18,9 +24,11 @@ export const CustomerStatus = {
   ISOLIR: 'isolir',
   TERMINATED: 'terminated',
 } as const;
+
 export type CustomerStatus = (typeof CustomerStatus)[keyof typeof CustomerStatus];
 
 export const SubscriptionStatus = CustomerStatus;
+
 export type SubscriptionStatus = CustomerStatus;
 
 export const InvoiceStatus = {
@@ -29,9 +37,20 @@ export const InvoiceStatus = {
   OVERDUE: 'overdue',
   VOID: 'void',
 } as const;
+
 export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
 
-// ---- DTO Auth ----
+export const ResellerDepositStatus = {
+  PENDING: 'pending',
+  PAID: 'paid',
+  EXPIRED: 'expired',
+  CANCELLED: 'cancelled',
+} as const;
+
+export type ResellerDepositStatus = (typeof ResellerDepositStatus)[keyof typeof ResellerDepositStatus];
+
+export type ResellerDepositItemStatus = 'pending' | 'settled' | 'excluded';
+
 export interface AuthUser {
   id: number;
   name: string;
@@ -39,7 +58,7 @@ export interface AuthUser {
   role: UserRole;
   /** Hanya terisi kalau role = reseller — kategori pelanggan yang jadi scope akses reseller ini. */
   resellerCategoryId: number | null;
-  /** Hanya relevan untuk role = customer — true kalau passwordHash masih null (belum pernah set sandi baru), wajib set sandi baru sebelum lanjut pakai app. */
+  /** Hanya relevan untuk role = customer — true kalau passwordHash masih null (belum pernah set sandi sendiri), wajib set sandi baru sebelum lanjut pakai app. */
   mustSetPassword?: boolean;
 }
 
@@ -49,7 +68,8 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
-// ---- DTO Subscriptions & Invoices ----
+export const CLIENT_PLATFORM_HEADER = 'x-client-platform';
+
 export interface SubscriptionDTO {
   /** ID publik (UUID) — bukan id sekuensial internal. */
   id: string;
@@ -79,6 +99,9 @@ export interface InvoiceDTO {
   customerId: string;
   customerName: string;
   customerPhone?: string | null;
+  /** Kategori pelanggan pemilik invoice; null bila pelanggan tanpa kategori. Hanya diisi di `GET /invoices`. */
+  categoryId?: number | null;
+  categoryName?: string | null;
   pppoeUsername: string;
   periodMonth: string;
   amount: number;
@@ -88,4 +111,37 @@ export interface InvoiceDTO {
   paidAt: string | null;
   reminderSentAt: string | null;
   reminderSentCount: number;
+  /** Terisi selama tagihan ada di setoran reseller yang masih pending — bayar/void/hapus ditolak. */
+  lockedByDeposit?: { id: string; depositNo: string } | null;
+}
+
+export interface ResellerDepositItemDTO {
+  /** publicId invoice — null bila invoicenya sudah dihapus permanen. */
+  invoiceId: string | null;
+  invoiceNo: string;
+  customerName: string | null;
+  amount: number;
+  status: ResellerDepositItemStatus;
+  excludedReason: string | null;
+}
+
+export interface ResellerDepositDTO {
+  /** ID publik (UUID). */
+  id: string;
+  depositNo: string;
+  categoryId: number;
+  categoryName: string;
+  createdByName: string;
+  status: ResellerDepositStatus;
+  totalAmount: number;
+  invoiceCount: number;
+  /** Dibayar tapi invoicenya keburu lunas/void/dihapus — perlu refund/kompensasi manual. */
+  overpaidAmount: number;
+  paymentType: string | null;
+  expiresAt: string;
+  paidAt: string | null;
+  note: string | null;
+  createdAt: string;
+  /** Hanya diisi di endpoint detail. */
+  items?: ResellerDepositItemDTO[];
 }

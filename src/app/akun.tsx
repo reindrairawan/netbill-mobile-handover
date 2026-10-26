@@ -21,8 +21,19 @@ import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
 import { PasswordInput } from '@/components/password-input';
 import { sharedStyles } from '@/constants/mobile-styles';
+import { ResellerContactModal } from '@/components/reseller-contact-modal';
+
+// Nomor CS FiberAccess. Pelanggan reseller mendapat nomor resellernya dari backend
+// (`supportWhatsapp` di /auth/me/customer); staf & reseller sendiri tetap ke CS FiberAccess.
+const FIBERACCESS_WHATSAPP = '6285159774741';
+
+function formatWhatsapp(number: string): string {
+  return number.startsWith('62') ? `+62 ${number.slice(2)}` : number;
+}
 
 interface CustomerProfileDTO {
+  supportWhatsapp?: string;
+  supportName?: string;
   name: string;
   email: string | null;
   phone: string | null;
@@ -44,8 +55,12 @@ const formatDate = (dateStr: string) => {
 export default function AkunScreen() {
   const { user, apiFetch, logout } = useAuth();
   const isStaff = user?.role !== 'customer';
+  const isReseller = user?.role === 'reseller';
+  const [showResellerContact, setShowResellerContact] = useState(false);
 
   const [customerProfile, setCustomerProfile] = useState<CustomerProfileDTO | null>(null);
+  const supportWhatsapp = (!isStaff && customerProfile?.supportWhatsapp) || FIBERACCESS_WHATSAPP;
+  const supportName = (!isStaff && customerProfile?.supportName) || 'FiberAccess';
   const [isLoading, setIsLoading] = useState(!isStaff);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showProfileDetailModal, setShowProfileDetailModal] = useState(false);
@@ -108,18 +123,13 @@ export default function AkunScreen() {
   };
 
   const handleWhatsAppSupport = async () => {
-    const phoneNumber = '6285159774741';
-    const text = `Halo FiberAccess Support, saya ${user?.name || 'Pelanggan'} (ID: ${customerProfile?.customerNo || '-'}) butuh bantuan mengenai layanan internet saya.`;
-    const appUrl = `whatsapp://send?phone=${phoneNumber}&text=${encodeURIComponent(text)}`;
-    const webUrl = `https://wa.me/${phoneNumber}?text=${encodeURIComponent(text)}`;
+    const text = `Halo ${supportName}, saya ${user?.name || 'Pelanggan'} (ID: ${customerProfile?.customerNo || '-'}) butuh bantuan mengenai layanan internet saya.`;
+    // wa.me adalah universal link: di iOS & Android langsung membuka aplikasi WhatsApp bila
+    // terpasang, tanpa perlu mendaftarkan skema whatsapp:// di LSApplicationQueriesSchemes.
     try {
-      // Di iOS, canOpenURL bisa reject (bukan cuma resolve false) kalau scheme
-      // "whatsapp" belum didaftarkan di LSApplicationQueriesSchemes — anggap saja
-      // app-nya tidak tersedia dan coba link web wa.me, jangan langsung error out.
-      const supported = await Linking.canOpenURL(appUrl).catch(() => false);
-      await Linking.openURL(supported ? appUrl : webUrl);
+      await Linking.openURL(`https://wa.me/${supportWhatsapp}?text=${encodeURIComponent(text)}`);
     } catch {
-      Alert.alert('Error', 'Gagal membuka WhatsApp. Silakan hubungi CS manual di +62 851-5977-4741.');
+      Alert.alert('Error', `Gagal membuka WhatsApp. Silakan hubungi ${supportName} manual di ${formatWhatsapp(supportWhatsapp)}.`);
     }
   };
 
@@ -198,10 +208,23 @@ export default function AkunScreen() {
               <Text style={styles.menuIcon}>🎧</Text>
               <View style={styles.menuTextContainer}>
                 <Text style={styles.menuTitle}>Bantuan & Live Chat</Text>
-                <Text style={styles.menuSubtitle}>WhatsApp FiberAccess (+62 851-5977-4741)</Text>
+                <Text style={styles.menuSubtitle}>
+                  WhatsApp {supportName} ({formatWhatsapp(supportWhatsapp)})
+                </Text>
               </View>
               <Text style={styles.menuChevron}>›</Text>
             </TouchableOpacity>
+
+            {isReseller && (
+              <TouchableOpacity style={styles.menuItem} onPress={() => setShowResellerContact(true)}>
+                <Text style={styles.menuIcon}>💬</Text>
+                <View style={styles.menuTextContainer}>
+                  <Text style={styles.menuTitle}>WhatsApp untuk Pelanggan</Text>
+                  <Text style={styles.menuSubtitle}>Nomor tujuan live chat pelanggan Anda</Text>
+                </View>
+                <Text style={styles.menuChevron}>›</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -219,6 +242,7 @@ export default function AkunScreen() {
         </ScrollView>
       )}
 
+      <ResellerContactModal visible={showResellerContact} onClose={() => setShowResellerContact(false)} />
       <BackendUrlModal visible={showSettingsModal} onClose={() => setShowSettingsModal(false)} />
 
       {/* Profile Detail Modal (customer only) */}

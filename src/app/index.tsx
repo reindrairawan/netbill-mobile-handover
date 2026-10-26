@@ -18,12 +18,20 @@ import { useAuth } from '@/contexts/auth-context';
 import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
 import { sharedStyles } from '@/constants/mobile-styles';
+import {
+  afterModalCloses,
+  DepositHistoryModal,
+  DepositPaymentModal,
+  MAX_DEPOSIT_INVOICES,
+  reportDepositStatus,
+} from '@/components/reseller-deposit';
 import { useRouter } from 'expo-router';
 
 // Dipakai dari @netbill/shared, bukan disalin ulang. Salinan lokal tidak pernah
 // menyebutkan bahwa `id` adalah publicId, dan dari situlah tagihan karangan sempat
 // dikirim ke /payments/batch memakai id pelanggan.
 import type { InvoiceDTO, SubscriptionDTO } from '@/types/api';
+import { isResellerScopedRole } from '@/types/api';
 
 interface StaffDashboardSummary {
   categoryName?: string;
@@ -71,7 +79,8 @@ export default function BerandaScreen() {
   const { user, apiFetch, can, permissions, isBootstrapping } = useAuth();
   const router = useRouter();
   const isStaff = user?.role !== 'customer';
-  const isReseller = user?.role === 'reseller';
+  // Termasuk teknisi reseller: tampilan & data dibatasi ke kategori reseller.
+  const isReseller = isResellerScopedRole(user?.role);
 
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -116,8 +125,16 @@ export default function BerandaScreen() {
   const [unpaidInvoicesList, setUnpaidInvoicesList] = useState<any[]>([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([]);
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
-  const [isSubmittingBatch, setIsSubmittingBatch] = useState(false);
   const [isLoadingBatchInvoices, setIsLoadingBatchInvoices] = useState(false);
+
+  // Setoran reseller via Midtrans
+  const canDeposit = can('billing.reseller_deposit');
+  const [depositPayUrl, setDepositPayUrl] = useState<string | null>(null);
+  const [activeDepositId, setActiveDepositId] = useState<string | null>(null);
+  const [showDepositHistory, setShowDepositHistory] = useState(false);
+  const [isSubmittingDeposit, setIsSubmittingDeposit] = useState(false);
+  // Tagihan yang sedang ada di setoran pending tidak bisa dipilih lagi (backend menolaknya).
+  const isLocked = (inv: any) => !!inv.lockedByDeposit;
 
   const openBatchModal = async () => {
     setShowBatchModal(true);
@@ -139,7 +156,7 @@ export default function BerandaScreen() {
     } catch (e: any) {
       // Jangan pernah mengarang tagihan pengganti di sini. Angka yang ditampilkan ke
       // reseller harus selalu berasal dari invoice nyata, karena daftar ini langsung
-      // dikirim ke /payments/batch untuk dilunasi.
+      // dikirim ke /reseller-deposits untuk disetor.
       Alert.alert('Gagal Memuat Tagihan', e.message || 'Tidak bisa mengambil daftar tagihan dari server.');
     }
 
@@ -154,8 +171,8 @@ export default function BerandaScreen() {
   };
 
   const toggleSelectAllInvoices = () => {
-    const filtered = unpaidInvoicesList.filter((i) =>
-      i.customerName?.toLowerCase().includes(batchSearchQuery.toLowerCase())
+    const filtered = unpaidInvoicesList.filter(
+      (i) => !isLocked(i) && i.customerName?.toLowerCase().includes(batchSearchQuery.toLowerCase())
     );
     if (selectedInvoiceIds.length === filtered.length) {
       setSelectedInvoiceIds([]);
@@ -164,71 +181,77 @@ export default function BerandaScreen() {
     }
   };
 
-  const submitBatchPayment = async () => {
-    if (selectedInvoiceIds.length === 0) {
-      Alert.alert('Pilih Tagihan', 'Silakan pilih minimal 1 tagihan pelanggan untuk dilunasi.');
+  const openDepositPayment = (url: string, depositId: string) => {
+    setActiveDepositId(depositId);
+    afterModalCloses(() => setDepositPayUrl(url));
+  };
+
+  const onDepositPaymentDone = () => {
+    setDepositPayUrl(null);
+    const id = activeDepositId;
+    if (!id) return;
+    afterModalCloses(() =>
+      reportDepositStatus(apiFetch, id, {
+        onPayAgain: (url) => openDepositPayment(url, id),
+        onChanged: () => loadData(),
+      }),
+    );
+  };
+
+  const submitDeposit = () => {
+    const selected = unpaidInvoicesList.filter((i) => selectedInvoiceIds.includes(i.id));
+    if (selected.length === 0) {
+      Alert.alert('Pilih Tagihan', 'Silakan pilih minimal 1 tagihan pelanggan untuk disetor.');
       return;
     }
-
-    const totalAmount = unpaidInvoicesList
-      .filter((i) => selectedInvoiceIds.includes(i.id))
-      .reduce((sum, i) => sum + (i.amount || 0), 0);
+    if (selected.length > MAX_DEPOSIT_INVOICES) {
+      Alert.alert('Terlalu Banyak Tagihan', `Maksimal ${MAX_DEPOSIT_INVOICES} tagihan per setoran. Bagi menjadi beberapa setoran.`);
+      return;
+    }
+    const total = selected.reduce((sum, i) => sum + (i.amount || 0), 0);
 
     Alert.alert(
-      'Konfirmasi Pelunasan Massal',
-      `Anda akan melunasi ${selectedInvoiceIds.length} tagihan pelanggan dengan total ${formatIDR(totalAmount)}. Lanjutkan?`,
+      'Bayar Setoran via Midtrans',
+      `Anda akan menyetor ${selected.length} tagihan senilai ${formatIDR(total)} dalam satu pembayaran.\n\n` +
+        'Tagihan baru lunas setelah pembayaran Anda diterima Midtrans. Selama menunggu (maks. 6 jam), tagihan ini terkunci dan tidak bisa dibayar pelanggan.',
       [
         { text: 'Batal', style: 'cancel' },
         {
-          text: 'Ya, Proses Pelunasan',
-          style: 'default',
+          text: 'Lanjut Bayar',
           onPress: async () => {
-            setIsSubmittingBatch(true);
+            setIsSubmittingDeposit(true);
             try {
-              const res = await apiFetch('/payments/batch', {
+              const res = await apiFetch('/reseller-deposits', {
                 method: 'POST',
-                body: JSON.stringify({
-                  invoiceIds: selectedInvoiceIds,
-                  method: 'cash',
-                  note: 'Pelunasan massal tunai oleh reseller',
-                }),
+                body: JSON.stringify({ invoiceIds: selected.map((i) => i.id) }),
               });
-              // `?? 0`, BUKAN `|| 0` — successCount 0 itu falsy, dan fallback ke jumlah
-              // yang dipilih pernah membuat "0 dari 25 gagal" tampil sebagai "berhasil
-              // melunasi 25". Reseller sudah menerima uang tunai di lapangan, jadi
-              // laporan palsu di sini berujung sengketa, bukan cuma UI keliru.
-              const berhasil = res?.successCount ?? 0;
-              const gagal = selectedInvoiceIds.length - berhasil;
-              const nominal = formatIDR(res?.totalAmount ?? 0);
-
-              if (berhasil === 0) {
-                Alert.alert(
-                  'Pelunasan Gagal',
-                  `Tidak ada tagihan yang berhasil dilunasi dari ${selectedInvoiceIds.length} yang dipilih.` +
-                    (res?.errors?.length ? `\n\nPenyebab:\n• ${res.errors.slice(0, 5).join('\n• ')}` : ''),
-                );
-              } else if (gagal > 0) {
-                Alert.alert(
-                  'Pelunasan Sebagian',
-                  `${berhasil} tagihan lunas senilai ${nominal}. ${gagal} tagihan GAGAL dan masih terbuka.` +
-                    (res?.errors?.length ? `\n\nPenyebab:\n• ${res.errors.slice(0, 5).join('\n• ')}` : ''),
+              setShowBatchModal(false);
+              const open = () => openDepositPayment(res.redirectUrl, res.deposit.id);
+              if (res.excluded?.length) {
+                // Total yang dibayar sudah dihitung ulang tanpa tagihan ini — reseller perlu
+                // tahu sebelum membayar, supaya angka di Midtrans tidak membingungkan.
+                afterModalCloses(() =>
+                  Alert.alert(
+                    'Sebagian Tagihan Dilewati',
+                    `${res.excluded.length} tagihan tidak ikut disetor:\n• ${res.excluded
+                      .slice(0, 5)
+                      .map((e: any) => `${e.invoiceNo ?? 'Tagihan'}: ${e.reason}`)
+                      .join('\n• ')}\n\nTotal yang dibayar: ${formatIDR(res.deposit.totalAmount)}.`,
+                    [{ text: 'Lanjut Bayar', onPress: () => openDepositPayment(res.redirectUrl, res.deposit.id) }],
+                  ),
                 );
               } else {
-                Alert.alert(
-                  'Pelunasan Berhasil! 🎉',
-                  `Berhasil melunasi ${berhasil} tagihan senilai ${nominal}. Status isolir pelanggan telah otomatis dibuka.`,
-                );
+                open();
               }
-              setShowBatchModal(false);
               loadData();
             } catch (e: any) {
-              Alert.alert('Gagal Pelunasan Massal', e.message || 'Terjadi kesalahan server.');
+              Alert.alert('Gagal Membuat Setoran', e.message || 'Terjadi kesalahan server.');
             } finally {
-              setIsSubmittingBatch(false);
+              setIsSubmittingDeposit(false);
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -245,9 +268,13 @@ export default function BerandaScreen() {
         setUnpaidInvoice(invoices.find((i) => i.status === 'unpaid' || i.status === 'overdue') || null);
       } else {
         // Staff & Reseller Dashboard Summary
-        const path = isReseller ? '/reports/reseller-dashboard-summary' : '/reports/dashboard-summary';
-        const data = await apiFetch(path);
-        setSummary(data);
+        // Teknisi reseller tidak punya izin ringkasan (berisi pendapatan). Jangan dipanggil:
+        // error 403 di sini akan membatalkan pemuatan data lain di bawahnya.
+        if (can(isReseller ? 'reseller_dashboard.view' : 'dashboard.view')) {
+          const path = isReseller ? '/reports/reseller-dashboard-summary' : '/reports/dashboard-summary';
+          const data = await apiFetch(path);
+          setSummary(data);
+        }
 
         // Fetch Live Routers (Infrastruktur) jika diizinkan RBAC
         if (can('routers.view')) {
@@ -530,6 +557,7 @@ export default function BerandaScreen() {
               )}
 
               {/* Stats Row */}
+              {can('reseller_dashboard.view') && (
               <View style={styles.statsRow}>
                 <View style={[styles.statBox, { marginRight: 6 }]}>
                   <View style={styles.statBoxHeader}>
@@ -551,20 +579,40 @@ export default function BerandaScreen() {
                   <Text style={styles.statBoxValue}>{formatIDR(summary?.revenueThisMonth ?? 0)}</Text>
                 </View>
               </View>
+              )}
 
               {/* Tombol Aksi Cepat Pelunasan Massal */}
+              {canDeposit && (
               <TouchableOpacity style={styles.batchBannerBtn} onPress={openBatchModal}>
                 <View style={styles.batchBannerLeft}>
                   <View style={styles.batchBannerIconBg}>
                     <MaterialIcons name="fact-check" size={24} color="#003d9b" />
                   </View>
                   <View>
-                    <Text style={styles.batchBannerTitle}>Pelunasan Tunai Massal</Text>
-                    <Text style={styles.batchBannerSub}>Lunasi banyak tagihan cash sekaligus</Text>
+                    <Text style={styles.batchBannerTitle}>Pelunasan Massal</Text>
+                    <Text style={styles.batchBannerSub}>
+                      Setor banyak tagihan sekaligus
+                    </Text>
                   </View>
                 </View>
                 <MaterialIcons name="chevron-right" size={24} color="#003d9b" />
               </TouchableOpacity>
+              )}
+
+              {canDeposit && (
+                <TouchableOpacity style={styles.batchBannerBtn} onPress={() => setShowDepositHistory(true)}>
+                  <View style={styles.batchBannerLeft}>
+                    <View style={styles.batchBannerIconBg}>
+                      <MaterialIcons name="account-balance-wallet" size={24} color="#003d9b" />
+                    </View>
+                    <View>
+                      <Text style={styles.batchBannerTitle}>Riwayat Setoran</Text>
+                      <Text style={styles.batchBannerSub}>Status setoran via Midtrans</Text>
+                    </View>
+                  </View>
+                  <MaterialIcons name="chevron-right" size={24} color="#003d9b" />
+                </TouchableOpacity>
+              )}
 
               {/* Daftar Pelanggan Reseller */}
               <View style={styles.sectionContainer}>
@@ -890,9 +938,9 @@ export default function BerandaScreen() {
             {/* Header */}
             <View style={styles.modalHeaderRow}>
               <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={sharedStyles.modalTitle}>⚡ Pelunasan Tunai Massal</Text>
+                <Text style={sharedStyles.modalTitle}>⚡ Pelunasan Massal</Text>
                 <Text style={{ fontSize: 11, color: '#434654', marginTop: 2 }}>
-                  Centang tagihan cash yang telah Anda terima dari pelanggan.
+                  Centang tagihan yang ingin Anda setor, lalu bayar sekaligus via Midtrans.
                 </Text>
               </View>
               <TouchableOpacity onPress={() => setShowBatchModal(false)}>
@@ -910,7 +958,7 @@ export default function BerandaScreen() {
               />
               <TouchableOpacity style={styles.selectAllBtn} onPress={toggleSelectAllInvoices}>
                 <Text style={styles.selectAllBtnText}>
-                  {selectedInvoiceIds.length > 0 && selectedInvoiceIds.length === unpaidInvoicesList.length
+                  {selectedInvoiceIds.length > 0 && selectedInvoiceIds.length === unpaidInvoicesList.filter((i) => !isLocked(i)).length
                     ? 'Batal Pilih'
                     : 'Pilih Semua'}
                 </Text>
@@ -937,14 +985,16 @@ export default function BerandaScreen() {
                   .filter((i) => i.customerName?.toLowerCase().includes(batchSearchQuery.toLowerCase()))
                   .map((item) => {
                     const isSelected = selectedInvoiceIds.includes(item.id);
+                    const locked = isLocked(item);
                     return (
                       <TouchableOpacity
                         key={item.id}
-                        style={[styles.batchItemCard, isSelected && styles.batchItemCardSelected]}
+                        style={[styles.batchItemCard, isSelected && styles.batchItemCardSelected, locked && { opacity: 0.55 }]}
+                        disabled={locked}
                         onPress={() => toggleSelectInvoice(item.id)}
                       >
                         <MaterialIcons
-                          name={isSelected ? 'check-box' : 'check-box-outline-blank'}
+                          name={locked ? 'lock' : isSelected ? 'check-box' : 'check-box-outline-blank'}
                           size={24}
                           color={isSelected ? '#003d9b' : '#737685'}
                           style={{ marginTop: 2 }}
@@ -967,9 +1017,9 @@ export default function BerandaScreen() {
                         </View>
                         <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
                           <Text style={styles.batchAmountText}>{formatIDR(item.amount)}</Text>
-                          <View style={item.status === 'overdue' ? styles.badgeIsolir : styles.badgePending}>
-                            <Text style={item.status === 'overdue' ? styles.badgeIsolirText : styles.badgePendingText}>
-                              {item.status === 'overdue' ? 'TUNGGAKAN' : 'BELUM BAYAR'}
+                          <View style={locked ? styles.badgePending : item.status === 'overdue' ? styles.badgeIsolir : styles.badgePending}>
+                            <Text style={locked ? styles.badgePendingText : item.status === 'overdue' ? styles.badgeIsolirText : styles.badgePendingText}>
+                              {locked ? 'DALAM SETORAN' : item.status === 'overdue' ? 'TUNGGAKAN' : 'BELUM BAYAR'}
                             </Text>
                           </View>
                         </View>
@@ -980,7 +1030,7 @@ export default function BerandaScreen() {
             )}
 
             {/* Sticky Bottom Bar */}
-            <View style={styles.batchFooterBar}>
+            <View style={[styles.batchFooterBar, { flexDirection: 'column', alignItems: 'stretch', gap: 10 }]}>
               <View>
                 <Text style={styles.batchFooterCount}>{selectedInvoiceIds.length} Tagihan Terpilih</Text>
                 <Text style={styles.batchFooterTotal}>
@@ -992,20 +1042,37 @@ export default function BerandaScreen() {
                 </Text>
               </View>
               <TouchableOpacity
-                style={[styles.batchSubmitBtn, isSubmittingBatch && { opacity: 0.6 }]}
-                disabled={isSubmittingBatch}
-                onPress={submitBatchPayment}
+                style={[styles.batchSubmitBtn, { alignItems: 'center' }, isSubmittingDeposit && { opacity: 0.6 }]}
+                disabled={isSubmittingDeposit}
+                onPress={submitDeposit}
               >
-                {isSubmittingBatch ? (
+                {isSubmittingDeposit ? (
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
-                  <Text style={styles.batchSubmitBtnText}>Proses Pelunasan</Text>
+                  <Text style={styles.batchSubmitBtnText}>Bayar via Midtrans</Text>
                 )}
               </TouchableOpacity>
+              {isSubmittingDeposit && (
+                <Text style={{ fontSize: 11, color: '#434654', textAlign: 'center' }}>
+                  Menyiapkan setoran… untuk banyak tagihan bisa memakan waktu hingga 1–2 menit.
+                </Text>
+              )}
             </View>
           </View>
         </View>
       </Modal>
+
+      <DepositHistoryModal
+        visible={showDepositHistory}
+        apiFetch={apiFetch}
+        onClose={() => setShowDepositHistory(false)}
+        onPay={(url, depositId) => {
+          setShowDepositHistory(false);
+          openDepositPayment(url, depositId);
+        }}
+        onChanged={() => loadData()}
+      />
+      <DepositPaymentModal url={depositPayUrl} depositId={activeDepositId} onDone={onDepositPaymentDone} />
     </SafeAreaView>
   );
 }

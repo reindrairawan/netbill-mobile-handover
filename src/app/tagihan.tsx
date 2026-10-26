@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WebView } from 'react-native-webview';
+import { PaymentWebView } from '@/components/payment-webview';
 import { useAuth } from '@/contexts/auth-context';
 import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
 import { sharedStyles } from '@/constants/mobile-styles';
+import { SaveQrButton } from '@/components/save-qr-button';
 
 // Tipe diambil dari @netbill/shared, bukan disalin ulang di sini. Salinan lokal
 // sebelumnya tidak memberi tahu bahwa `id` berisi publicId, dan dari situlah tombol
@@ -30,6 +31,7 @@ export default function TagihanScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [paymentUrl, setPaymentUrl] = useState('');
+  const [payingInvoiceId, setPayingInvoiceId] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceDTO | null>(null);
 
@@ -59,6 +61,7 @@ export default function TagihanScreen() {
         body: JSON.stringify({ forceNew: true }),
       });
       if (res?.redirectUrl) {
+        setPayingInvoiceId(invoice.id);
         setPaymentUrl(res.redirectUrl);
         setShowPaymentModal(true);
       } else {
@@ -210,20 +213,32 @@ export default function TagihanScreen() {
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
           <View style={styles.paymentHeader}>
-            <Text style={styles.paymentHeaderText}>⚡ Pembayaran via QRIS</Text>
-            <TouchableOpacity
-              style={styles.paymentDoneBtn}
-              onPress={() => {
+            <Text style={styles.paymentHeaderText} numberOfLines={1}>
+              ⚡ Pembayaran via QRIS
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {payingInvoiceId ? <SaveQrButton qrPath={`/portal/invoices/${payingInvoiceId}/qris`} fileLabel="tagihan" /> : null}
+              <TouchableOpacity
+                style={styles.paymentDoneBtn}
+                onPress={() => {
+                  setShowPaymentModal(false);
+                  setPaymentUrl('');
+                  loadInvoices();
+                }}
+              >
+                <Text style={styles.paymentDoneBtnText}>Selesai</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          {paymentUrl ? (
+            <PaymentWebView
+              url={paymentUrl}
+              onFinished={() => {
                 setShowPaymentModal(false);
                 setPaymentUrl('');
                 loadInvoices();
               }}
-            >
-              <Text style={styles.paymentDoneBtnText}>Selesai</Text>
-            </TouchableOpacity>
-          </View>
-          {paymentUrl ? (
-            <WebView source={{ uri: paymentUrl }} style={{ flex: 1 }} javaScriptEnabled domStorageEnabled startInLoadingState />
+            />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ color: '#666' }}>Tautan pembayaran tidak valid.</Text>
@@ -330,6 +345,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     color: '#fff',
+    flexShrink: 1,
+    marginRight: 8,
   },
   paymentDoneBtn: {
     paddingVertical: 6,
