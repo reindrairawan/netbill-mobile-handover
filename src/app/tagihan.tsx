@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { PaymentWebView } from '@/components/payment-webview';
 import { useAuth } from '@/contexts/auth-context';
 import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
 import { sharedStyles } from '@/constants/mobile-styles';
-import { SaveQrButton } from '@/components/save-qr-button';
+import { SaveQrButton, SaveQrHint } from '@/components/save-qr-button';
 
 // Tipe diambil dari @netbill/shared, bukan disalin ulang di sini. Salinan lokal
 // sebelumnya tidak memberi tahu bahwa `id` berisi publicId, dan dari situlah tombol
@@ -211,6 +211,9 @@ export default function TagihanScreen() {
           setPaymentUrl('');
         }}
       >
+        {/* Konten Modal iOS hidup di jendela native terpisah: tanpa provider sendiri inset
+            status bar terbaca 0, header (Simpan QR/Selesai) tertutup bar sinyal & tak bisa ditekan. */}
+        <SafeAreaProvider>
         <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
           <View style={styles.paymentHeader}>
             <Text style={styles.paymentHeaderText} numberOfLines={1}>
@@ -230,6 +233,7 @@ export default function TagihanScreen() {
               </TouchableOpacity>
             </View>
           </View>
+          <SaveQrHint />
           {paymentUrl ? (
             <PaymentWebView
               url={paymentUrl}
@@ -245,6 +249,7 @@ export default function TagihanScreen() {
             </View>
           )}
         </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </SafeAreaView>
   );

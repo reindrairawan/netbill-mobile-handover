@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Linking, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Alert, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { useAuth } from '@/contexts/auth-context';
@@ -53,19 +53,38 @@ export function SaveQrButton({ qrPath, fileLabel }: { qrPath: string; fileLabel:
 
   return (
     <TouchableOpacity style={[styles.btn, saving && { opacity: 0.6 }]} disabled={saving} onPress={save} accessibilityLabel="Simpan QR ke galeri">
-      {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.text}>Simpan QR</Text>}
+      {saving ? <ActivityIndicator size="small" color="#0052cc" /> : <Text style={styles.text}>Simpan QR ke Galeri</Text>}
     </TouchableOpacity>
+  );
+}
+
+/**
+ * Petunjuk di bawah header halaman pembayaran. Tombol "Download QRIS" bawaan Midtrans tidak
+ * berfungsi di WebView (URL `blob:`) dan tidak boleh disembunyikan lewat JavaScript, jadi
+ * pengguna diarahkan ke tombol Simpan QR di header. Juga menjelaskan syaratnya: QR baru ada
+ * setelah QRIS dipilih di halaman Midtrans.
+ */
+export function SaveQrHint() {
+  return (
+    <View style={styles.hint}>
+      <Text style={styles.hintText}>
+        Pilih QRIS, lalu tekan <Text style={styles.hintBold}>Simpan QR ke Galeri</Text> untuk menyimpan gambar QR dan membayarnya dari aplikasi bank atau
+        e-wallet. Tombol Download QRIS di halaman ini tidak berfungsi di aplikasi.
+      </Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   btn: {
-    paddingVertical: 6,
+    paddingVertical: 7,
     paddingHorizontal: 12,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    minWidth: 84,
+    borderRadius: 6,
+    backgroundColor: '#fff',
     alignItems: 'center',
   },
-  text: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
+  text: { color: '#0052cc', fontWeight: 'bold', fontSize: 12 },
+  hint: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#fff8e1', borderBottomWidth: 1, borderBottomColor: '#f0e2b6' },
+  hintText: { fontSize: 12, lineHeight: 17, color: '#5f4b00' },
+  hintBold: { fontWeight: '700' },
 });
