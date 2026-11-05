@@ -3,3 +3,8 @@
 export function SaveQrButton(_props: { qrPath: string; fileLabel: string }) {
   return null;
 }
+
+// Petunjuknya bicara soal tombol Simpan QR yang tidak ada di web.
+export function SaveQrHint() {
+  return null;
+}

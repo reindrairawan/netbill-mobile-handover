@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { PaymentWebView } from '@/components/payment-webview';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { ResellerDepositDTO, ResellerDepositStatus } from '@/types/api';
 import { sharedStyles } from '@/constants/mobile-styles';
-import { SaveQrButton } from '@/components/save-qr-button';
+import { SaveQrButton, SaveQrHint } from '@/components/save-qr-button';
+import { BottomSheetModal } from '@/components/bottom-sheet-modal';
 
 type ApiFetch = (path: string, options?: RequestInit) => Promise<any>;
 
@@ -50,6 +51,8 @@ export function DepositPaymentModal({
 }) {
   return (
     <Modal visible={!!url} animationType="slide" onRequestClose={onDone}>
+      {/* Provider sendiri: lihat catatan di modal pembayaran tagihan.tsx (inset iOS di Modal). */}
+      <SafeAreaProvider>
       <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
         <View style={styles.paymentHeader}>
           <Text style={styles.paymentHeaderText} numberOfLines={1}>
@@ -62,8 +65,10 @@ export function DepositPaymentModal({
             </TouchableOpacity>
           </View>
         </View>
+        <SaveQrHint />
         {url ? <PaymentWebView url={url} onFinished={onDone} /> : null}
       </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
@@ -254,9 +259,12 @@ export function DepositHistoryModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={detail ? () => setDetail(null) : onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+    <BottomSheetModal
+      visible={visible}
+      onRequestClose={detail ? () => setDetail(null) : onClose}
+      sheetStyle={{ paddingTop: 20, paddingHorizontal: 20 }}
+      contentPaddingBottom={24}
+    >
           <View style={styles.headerRow}>
             {detail ? (
               <TouchableOpacity onPress={() => setDetail(null)} style={{ marginRight: 8 }} accessibilityLabel="Kembali ke daftar">
@@ -300,9 +308,7 @@ export function DepositHistoryModal({
               ))}
             </ScrollView>
           )}
-        </View>
-      </View>
-    </Modal>
+    </BottomSheetModal>
   );
 }
 
@@ -407,16 +413,6 @@ const styles = StyleSheet.create({
   paymentActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   paymentDoneBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4, backgroundColor: 'rgba(255, 255, 255, 0.2)' },
   paymentDoneBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingTop: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    maxHeight: '92%',
-  },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
   subtitle: { fontSize: 11, color: '#434654', marginTop: 2 },
   empty: { alignItems: 'center', paddingVertical: 32, gap: 8 },

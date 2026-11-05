@@ -45,20 +45,14 @@ Aplikasi ini melayani pelanggan untuk melihat informasi paket/langganan internet
 
 ## Konfigurasi EAS & Build untuk Google Play Store
 
-Repositori ini telah dibersihkan dari ID proyek dan kredensial developer sebelumnya. Sebelum melakukan build cloud dengan Expo Application Services (EAS), lakukan inisialisasi project milik akun Anda:
+`app.json` sudah memuat konfigurasi **Expo Updates (OTA)** yang menunjuk ke project EAS milik pengembang (`owner`, `extra.eas.projectId`, `updates.url`, channel `production`). Cukup membuild dengan `app.json` ini, baik lewat Xcode/Gradle lokal maupun EAS Build; **tidak perlu `eas init` atau `eas update:configure`**. Perubahan non-native dikirim pengembang lewat `eas update` dan sampai ke aplikasi dengan versi yang sama tanpa rilis ulang ke store. Lihat `CHANGELOG.md` untuk syarat dan langkah rilis.
 
-### 1. Inisialisasi Project EAS Baru
-Pastikan Anda sudah login ke akun Expo Anda (`eas login`), kemudian jalankan:
-```bash
-eas init
-```
-Perintah ini akan mendaftarkan project baru di akun Expo Anda dan memperbarui ID project di `app.json`.
+### 1. Memakai akun EAS sendiri (opsional)
+Hanya jika tim ingin mengelola OTA dan build cloud sendiri. Login (`eas login`), jalankan `eas init` untuk project baru, lalu ganti `owner`, `extra.eas.projectId`, dan `updates.url` di `app.json` dengan milik project baru. Setelah itu update OTA harus dipublikasikan dari akun tersebut, bukan oleh pengembang.
 
-### 2. Konfigurasi Expo Updates (OTA Updates)
-Untuk mengaktifkan update Over-The-Air (OTA) melalui channel EAS Update:
-```bash
-eas update:configure
-```
+### 2. Aturan OTA yang perlu diingat
+- OTA hanya sampai ke aplikasi yang dibuild dari konfigurasi ini dan memiliki `version` yang sama persis.
+- Perubahan native (dependency/plugin baru, izin baru) tetap butuh build baru dan versi baru.
 
 ### 3. Build Android App Bundle (AAB) untuk Google Play Store
 Untuk memicu build AAB production yang siap diunggah ke Google Play Console:

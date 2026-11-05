@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/auth-context';
 import { AppHeader } from '@/components/app-header';
 import { BackendUrlModal } from '@/components/backend-url-modal';
+import { BottomSheetModal } from '@/components/bottom-sheet-modal';
 import { sharedStyles } from '@/constants/mobile-styles';
 import {
   afterModalCloses,
@@ -923,18 +924,13 @@ export default function BerandaScreen() {
       </Modal>
 
       {/* Modal Pelunasan Massal (Batch Cash Collection) */}
-      <Modal visible={showBatchModal} transparent animationType="slide" onRequestClose={() => setShowBatchModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
-          <View style={{
-            backgroundColor: '#fff',
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 20,
-            paddingHorizontal: 20,
-            maxHeight: '92%',
-            flex: 0,
-            flexShrink: 1,
-          }}>
+      {/* contentPaddingBottom 0: footer sudah punya padding sendiri, cukup didorong di atas bar navigasi. */}
+      <BottomSheetModal
+        visible={showBatchModal}
+        onRequestClose={() => setShowBatchModal(false)}
+        sheetStyle={{ paddingTop: 20, paddingHorizontal: 20 }}
+        contentPaddingBottom={0}
+      >
             {/* Header */}
             <View style={styles.modalHeaderRow}>
               <View style={{ flex: 1, marginRight: 12 }}>
@@ -1058,9 +1054,7 @@ export default function BerandaScreen() {
                 </Text>
               )}
             </View>
-          </View>
-        </View>
-      </Modal>
+      </BottomSheetModal>
 
       <DepositHistoryModal
         visible={showDepositHistory}
